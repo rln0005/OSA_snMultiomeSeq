@@ -90,7 +90,6 @@ ngenes=colSums(GetAssayData(object=sn_OSA_filter, assay="ATAC", slot="counts")>0
 summary(ngenes)
 mean(ngenes)
 
-
 ### Fig2B: SCATTERPLOTS--Before & After Filtering
 #PLOT: before filtering--RNA counts vs RNA features
 p1<-FeatureScatter(sn_OSA, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")+ scale_x_continuous(labels=scientific, n.breaks=4) + theme(axis.text=element_text(size=10))
@@ -153,6 +152,8 @@ plot3c <- DimPlot(sn_OSA_filter, reduction = "UMAP", label = TRUE, repel = TRUE,
 plot3a
 plot3b
 plot3c
+ggarrange(plot3a + plot3b + plot3c)
+
 #extract the metadata
 md <- sn_OSA_filter@meta.data %>% as.data.table
 ###GET THE NUMBER OF CELLS FROM EACH CLUSTER
@@ -231,10 +232,40 @@ plot5b <- DimPlot(sn_OSA_filter, reduction = "UMAP", label = FALSE, cols = ccols
 plot5b <- LabelClusters(plot5b, id="customclassif", fontface="bold", color="black", repel=TRUE)
 plot5b
 
-
+###### 5.5. Cluster Annotation with Individual Tumor/Normal Markers (scType) ###### 
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R")
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
+db_ = 'C:/Users/becca/Dropbox/SingleNucleiMultiomeSeq/OSA_snMultiomeSeq_GITHUB/sc_markers_indivRNAseq_ScType.xlsx'
+tissue = "Osteosarcoma" 
+gs_list = gene_sets_prepare(db_, tissue)
+es.max = sctype_score(scRNAseqData = sn_OSA_filter[["SCT"]]@scale.data, scaled = TRUE, 
+                      gs = gs_list$gs_positive) 
+cL_resutls = do.call("rbind", lapply(unique(sn_OSA_filter@meta.data$seurat_clusters), function(cl){
+  es.max.cl = sort(rowSums(es.max[ ,rownames(sn_OSA_filter@meta.data[sn_OSA_filter@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+  head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(sn_OSA_filter@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores = cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
+print(sctype_scores[,1:3])
+sn_OSA_filter@meta.data$customclassif = ""
+for(j in unique(sctype_scores$cluster)){
+  cl_type = sctype_scores[sctype_scores$cluster==j,]; 
+  sn_OSA_filter@meta.data$customclassif[sn_OSA_filter@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])}
+ccolss=c('#0096FF', '#FF0000', '#808080')
+#FIGURE5B--individual OSA tumor + normal bone RNAseq annotation
+plot5b <- DimPlot(sn_OSA_filter, reduction = "UMAP", label = FALSE, cols = ccolss, group.by = 'customclassif') + 
+  ggtitle("Cluster Annotation with Individual OSA Tumor/Normal Bone RNAseq Markers") + 
+  theme(plot.title = element_text(hjust = 0.5, size=11))
+plot5b <- LabelClusters(plot5b, id="customclassif", fontface="bold", color="black", repel=TRUE)
+plot5b
 
 ###### 6. Plot Specific Marker Genes (seurat) ######
 DefaultAssay(sn_OSA_filter) <- "SCT"
+
+#CD274=PDL1
+FeaturePlot(sn_OSA_filter, 
+            features=c("CD274", "CD8A"), 
+            reduction='UMAP', max.cutoff=3)
 
 #plot marker genes for each cluster 
 #osteoblasts (clusters 0,1,7)
@@ -305,6 +336,12 @@ FeaturePlot(sn_OSA_filter,
             features=c("CD8A","LOX", "CD8B","NKG7","TNFRSF6"),
             reduction='UMAP', max.cutoff=3, ncol=4)
 
+
+#plot marker genes for MSCs
+FeaturePlot(sn_OSA_filter, 
+            features=c("PRRX1", "POSTN","LUM"), 
+            reduction='UMAP', max.cutoff=3)
+
 ###plotting 'random' genes 
 #chemo resistance gene: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2889491/
 FeaturePlot(sn_OSA_filter, features=c("GSTP1"), reduction='UMAP', max.cutoff=3)
@@ -361,7 +398,7 @@ library(tidyverse)
 
 #import the PANTHER pathway results {for each cluster}
 setwd("C:/Users/becca/Dropbox/SingleNucleiMultiomeSeq/OSA_snMultiomeSeq_GITHUB/DifferentialAnalysisOutput/PANTHER_Pathway_Analysis_9clusters")
-data <- read.table("cluster0_GOpathways.txt", sep="\t", fill=TRUE, header=TRUE)
+data <- read.table("cluster7_GOpathways.txt", sep="\t", fill=TRUE, header=TRUE)
 #data <- read.table("cluster0vs1and7_GOpathways.txt", sep="\t", fill=TRUE, header=TRUE)
 #data <- read.table("cluster1and7vs0_GOpathways.txt", sep="\t", fill=TRUE, header=TRUE)
 
@@ -379,7 +416,7 @@ counts <- -log10(data$Client.Text.Box.Input..FDR.)
 
 
 #for clusters 0-9: bubble plot with legend
-c0 <- ggplot(data, 
+c7 <- ggplot(data, 
              aes(x=GO.biological.process.complete,  y=counts, fill=GO.biological.process.complete, color=GO.biological.process.complete, size=fold)) + 
   geom_point(alpha=1) + 
   scale_size(trans="log10", name="Fold Enrichment", range=c(3,4.5)) +
@@ -387,27 +424,42 @@ c0 <- ggplot(data,
   ylab("-log10(FDR)") +
   xlab("GO Biological Process")
 
-c0 <- c0 + ggtitle("Enriched GO Biological Processes in Cluster 0") + 
+c7 <- c7 + ggtitle("Enriched GO Biological Processes in Cluster 1") + 
   theme(plot.title=element_text(hjust=1, size=10), axis.title=element_text(size=7), axis.text.x=element_text(size=7),axis.text.y=element_text(size=8), legend.title=element_text(size=8)) + 
-  guides(color="none", fill=FALSE) 
-c0
+  guides(color="none", fill="none") 
+c7
 
 ggsave("cluster0_GOpathways.png",
        path="C:/Users/becca/Dropbox/SingleNucleiMultiomeSeq/OSA_snMultiomeSeq_GITHUB/Figures",
        width=9, height=1.5, dpi=300)
 
 
-#for clusters 0 vs 1and7 and vice versa: bubble plot with legend 
-c0 <- ggplot(data, 
+data <- read.table("cluster3_GOpathways.txt", sep="\t", fill=TRUE, header=TRUE)
+
+data <- data[,c(1,6,7,8)]
+data <- head(data, 5)
+fold <- data$Client.Text.Box.Input..fold.Enrichment.
+fold <- as.numeric(fold)
+data$GO.biological.process.complete <- factor(data$GO.biological.process.complete, levels=data$GO.biological.process.complete[order(data$Client.Text.Box.Input..fold.Enrichment.)])
+counts <- -log10(data$Client.Text.Box.Input..FDR.)
+
+c3 <- ggplot(data, 
              aes(x=GO.biological.process.complete,  y=counts, fill=GO.biological.process.complete, color=GO.biological.process.complete, size=fold)) + 
   geom_point(alpha=1) + 
-  scale_size(trans="log10", name="Fold Enrichment", range=c(3,4.5)) +
+  scale_size(trans="log10", name="Fold Enrichment", range=c(5,8)) +
   coord_flip() + 
   ylab("-log10(FDR)") +
   xlab("GO Biological Process")
-c0 + ggtitle("Enriched GO Biological Processes in Cluster 0 Compared to Clusters 1 and 7") + 
-  theme(plot.title=element_text(hjust=1, size=10), axis.title=element_text(size=7), axis.text.x=element_text(size=7),axis.text.y=element_text(size=8), legend.title=element_text(size=8)) + 
-  guides(color="none", fill=FALSE)
+
+c3 <- c3 + ggtitle("Enriched GO Biological Processes in Cluster 3") + 
+  theme(plot.title=element_text(hjust=0.5, size=15), 
+        axis.title=element_text(size=11), 
+        axis.text.x=element_text(size=11),
+        axis.text.y=element_text(size=12), 
+        legend.title=element_text(size=12)) + 
+  guides(color="none", fill="none") 
+c3
+
 
 #export using 650x160
 #or export to create a png file: 
@@ -590,8 +642,8 @@ plot_cnv(infercnv_obj_default,
          output_filename="infercnv_scaled_to_chr")
 
 
-###### 11. (not using for pub) Immune Landscape: Subset the Immune Cell Clusters (clusters 4, 5, and 8:myeloid,osteoclast,& memCD4+ T cells) ###### 
-subset <- subset(x=sn_OSA_filter, idents=c("4","5","8"))
+###### 11. Immune Landscape: Subset the Immune Cell Clusters (clusters 4 & 8:myeloid & memCD4+ T cells) ###### 
+subset <- subset(x=sn_OSA_filter, idents=c("4","8"))
 ##perform PCA and UMAP projections for this subset of clusters with GEX data
 DefaultAssay(subset) <- "RNA"
 #GEX data
@@ -608,7 +660,7 @@ subset <- RunUMAP(subset, reduction = 'lsi', dims = 2:10, reduction.name = "umap
 subset <- FindMultiModalNeighbors(subset, reduction.list = list("pca", "lsi"), dims.list = list(1:10, 2:10))
 subset <- RunUMAP(subset, nn.name = "weighted.nn", reduction.name = "UMAP", reduction.key = "wnnUMAP_")
 #identify 9 clusters (c0-8)
-subset <- FindClusters(subset, graph.name = "wsnn", algorithm = 3, resolution=0.7, verbose = FALSE)
+subset <- FindClusters(subset, graph.name = "wsnn", algorithm = 3, resolution=0.8, verbose = FALSE)
 #plot all 3 UMAP graphs
 plot3a <- DimPlot(subset, reduction = "umap.rna", label = TRUE, repel = TRUE, label.size=6) + ggtitle("GEX")+ theme(plot.title=element_text(hjust=0.5)) + NoLegend()
 plot3b <- DimPlot(subset, reduction = "umap.atac", label = TRUE, repel = TRUE, label.size=6) + ggtitle("ATAC")+ theme(plot.title=element_text(hjust=0.5)) + NoLegend()
@@ -617,12 +669,20 @@ plot3a
 plot3b
 plot3c
 
+
+#extract the metadata
+md <- subset@meta.data %>% as.data.table
+###GET THE NUMBER OF CELLS FROM EACH CLUSTER
+table(subset@meta.data$wsnn_res.0.8, subset@meta.data$orig.ident)
+
+
 #ScType for Single Cell Annotation: https://github.com/IanevskiAleksandr/sc-type 
 # load gene set preparation function and cell type annotation function 
 source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R")
 source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
 # load the annotation file (DB file)
-db_ = 'C:/Users/becca/Dropbox/SingleNucleiMultiomeSeq/OSA_snMultiomeSeq_GITHUB/ScType_bone_NEW.xlsx'
+db_ = 'C:/Users/becca/Dropbox/SingleNucleiMultiomeSeq/OSA_snMultiomeSeq_GITHUB/ScType_canine_leukocytes.xlsx'
+db_ = 'C:/Users/rln0005/Dropbox/SingleNucleiMultiomeSeq/OSA_snMultiomeSeq_GITHUB/ScType_canine_leukocytes.xlsx'
 # identify the tissue type
 tissue = "Bone" 
 # prepare gene sets
@@ -663,3 +723,5 @@ FeaturePlot(subset,
 FeaturePlot(subset,
             features=c("CD8A","CD8B"),
             reduction='UMAP', max.cutoff=3, ncol=3)
+
+
